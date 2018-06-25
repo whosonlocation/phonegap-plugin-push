@@ -98,4 +98,7 @@ public interface PushConstants {
   public static final String DELETE_CHANNEL = "deleteChannel";
   public static final String ONGOING = "ongoing";
   public static final String LIST_CHANNELS = "listChannels";
+  public static final String DISPLAY_CALLBACK = "displayCallback";
+  public static final String CALLBACK_URL = "url";
+  public static final String CALLBACK_HEADERS = "headers";
 }

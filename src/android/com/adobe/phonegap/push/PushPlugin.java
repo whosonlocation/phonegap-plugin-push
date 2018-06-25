@@ -172,6 +172,7 @@ public class PushPlugin extends CordovaPlugin implements PushConstants {
       cordova.getThreadPool().execute(new Runnable() {
         public void run() {
           pushContext = callbackContext;
+          JSONObject optionObj = null;
           JSONObject jo = null;
 
           Log.v(LOG_TAG, "execute: data=" + data.toString());
@@ -181,7 +182,8 @@ public class PushPlugin extends CordovaPlugin implements PushConstants {
           String senderID = null;
 
           try {
-            jo = data.getJSONObject(0).getJSONObject(ANDROID);
+            optionObj = data.getJSONObject(0);
+            jo = optionObj.getJSONObject(ANDROID);
 
             // If no NotificationChannels exist create the default one
             createDefaultNotificationChannelIfNeeded(jo);
@@ -224,34 +226,40 @@ public class PushPlugin extends CordovaPlugin implements PushConstants {
             callbackContext.error(e.getMessage());
           }
 
-          if (jo != null) {
+          if (optionObj != null) {
             SharedPreferences.Editor editor = sharedPref.edit();
             try {
-              editor.putString(ICON, jo.getString(ICON));
+              editor.putString(DISPLAY_CALLBACK, optionObj.getString(DISPLAY_CALLBACK));
             } catch (JSONException e) {
-              Log.d(LOG_TAG, "no icon option");
+              Log.d(LOG_TAG, "no notification-displayed callback option");
             }
-            try {
-              editor.putString(ICON_COLOR, jo.getString(ICON_COLOR));
-            } catch (JSONException e) {
-              Log.d(LOG_TAG, "no iconColor option");
+            if (jo != null) {
+              try {
+                editor.putString(ICON, jo.getString(ICON));
+              } catch (JSONException e) {
+                Log.d(LOG_TAG, "no icon option");
+              }
+              try {
+                editor.putString(ICON_COLOR, jo.getString(ICON_COLOR));
+              } catch (JSONException e) {
+                Log.d(LOG_TAG, "no iconColor option");
+              }
+
+              boolean clearBadge = jo.optBoolean(CLEAR_BADGE, false);
+              if (clearBadge) {
+                setApplicationIconBadgeNumber(getApplicationContext(), 0);
+              }
+
+              editor.putBoolean(SOUND, jo.optBoolean(SOUND, true));
+              editor.putBoolean(VIBRATE, jo.optBoolean(VIBRATE, true));
+              editor.putBoolean(CLEAR_BADGE, clearBadge);
+              editor.putBoolean(CLEAR_NOTIFICATIONS, jo.optBoolean(CLEAR_NOTIFICATIONS, true));
+              editor.putBoolean(FORCE_SHOW, jo.optBoolean(FORCE_SHOW, false));
+              editor.putString(SENDER_ID, senderID);
+              editor.putString(MESSAGE_KEY, jo.optString(MESSAGE_KEY));
+              editor.putString(TITLE_KEY, jo.optString(TITLE_KEY));
+              editor.commit();
             }
-
-            boolean clearBadge = jo.optBoolean(CLEAR_BADGE, false);
-            if (clearBadge) {
-              setApplicationIconBadgeNumber(getApplicationContext(), 0);
-            }
-
-            editor.putBoolean(SOUND, jo.optBoolean(SOUND, true));
-            editor.putBoolean(VIBRATE, jo.optBoolean(VIBRATE, true));
-            editor.putBoolean(CLEAR_BADGE, clearBadge);
-            editor.putBoolean(CLEAR_NOTIFICATIONS, jo.optBoolean(CLEAR_NOTIFICATIONS, true));
-            editor.putBoolean(FORCE_SHOW, jo.optBoolean(FORCE_SHOW, false));
-            editor.putString(SENDER_ID, senderID);
-            editor.putString(MESSAGE_KEY, jo.optString(MESSAGE_KEY));
-            editor.putString(TITLE_KEY, jo.optString(TITLE_KEY));
-            editor.commit();
-
           }
 
           if (!gCachedExtras.isEmpty()) {

@@ -13,21 +13,25 @@ import android.content.res.AssetManager;
 import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
 import android.graphics.Rect;
 import android.graphics.RectF;
-import android.graphics.Paint;
-import android.graphics.Canvas;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.support.annotation.Nullable;
+import android.support.annotation.RequiresApi;
 import android.support.v4.app.NotificationCompat;
 import android.support.v4.app.NotificationCompat.WearableExtender;
+import android.support.v4.app.NotificationManagerCompat;
 import android.support.v4.app.RemoteInput;
 import android.text.Html;
 import android.text.Spanned;
+import android.text.TextUtils;
 import android.util.Log;
 
 import com.google.firebase.messaging.FirebaseMessagingService;
@@ -37,16 +41,20 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.BufferedOutputStream;
+import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.OutputStreamWriter;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.security.SecureRandom;
 
 @SuppressLint("NewApi")
 public class FCMService extends FirebaseMessagingService implements PushConstants {
@@ -103,6 +111,12 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
         PushPlugin.setApplicationIconBadgeNumber(getApplicationContext(), 0);
       }
 
+      if (!isNotificationEnabled(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? getChannelId(extras) : null)
+              && !PushPlugin.isInForeground()) {
+        // Invoke callback to tell server the message is not displayed because of permission
+        messageAck(message.getMessageId(), "denied");
+        return;
+      }
       // if we are in the foreground and forceShow is `false` only send data
       if (!forceShow && PushPlugin.isInForeground()) {
         Log.d(LOG_TAG, "foreground");
@@ -126,6 +140,8 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
 
         showNotificationIfPossible(applicationContext, extras);
       }
+      // Invoke callback to tell server the message has been handled by client
+      messageAck(message.getMessageId(), "processed");
     }
   }
 
@@ -383,26 +399,9 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
     PendingIntent deleteIntent = PendingIntent.getBroadcast(this, requestCode, dismissedNotificationIntent,
         PendingIntent.FLAG_CANCEL_CURRENT);
 
-    NotificationCompat.Builder mBuilder = null;
-
+    NotificationCompat.Builder mBuilder;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      String channelID = extras.getString(ANDROID_CHANNEL_ID);
-
-      // if the push payload specifies a channel use it
-      if (channelID != null) {
-        mBuilder = new NotificationCompat.Builder(context, channelID);
-      } else {
-        List<NotificationChannel> channels = mNotificationManager.getNotificationChannels();
-
-        if (channels.size() == 1) {
-          channelID = channels.get(0).getId();
-        } else {
-          channelID = extras.getString(ANDROID_CHANNEL_ID, DEFAULT_CHANNEL_ID);
-        }
-        Log.d(LOG_TAG, "Using channel ID = " + channelID);
-        mBuilder = new NotificationCompat.Builder(context, channelID);
-      }
-
+      mBuilder = new NotificationCompat.Builder(context, getChannelId(extras));
     } else {
       mBuilder = new NotificationCompat.Builder(context);
     }
@@ -937,5 +936,83 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
     Log.d(LOG_TAG, "sender id = " + savedSenderID);
 
     return from.equals(savedSenderID) || from.startsWith("/topics/");
+  }
+
+  private void messageAck(String messageId, String status) {
+    SharedPreferences sharedPref = getApplicationContext().getSharedPreferences(PushPlugin.COM_ADOBE_PHONEGAP_PUSH,
+            Context.MODE_PRIVATE);
+    String displayCallbackOptionsStr = sharedPref.getString(DISPLAY_CALLBACK, null);
+    if (displayCallbackOptionsStr != null) {
+      new Thread(() -> {
+        try {
+          JSONObject displayCallbackOptions = new JSONObject(displayCallbackOptionsStr);
+          OutputStream out;
+          URL url = new URL(displayCallbackOptions.getString(CALLBACK_URL));
+          HttpURLConnection urlConnection = (HttpURLConnection) url.openConnection();
+          urlConnection.setRequestMethod("POST");
+          urlConnection.setRequestProperty("Content-Type", "application/json;charset=UTF-8");
+          urlConnection.setRequestProperty("Accept","application/json");
+          if (displayCallbackOptions.has(CALLBACK_HEADERS)) {
+            JSONObject headers = displayCallbackOptions.getJSONObject(CALLBACK_HEADERS);
+            Iterator<String> iterator = headers.keys();
+            while (iterator.hasNext()) {
+              String key = iterator.next();
+              String value = headers.getString(key);
+              urlConnection.setRequestProperty(key, value);
+            }
+          }
+          urlConnection.setDoOutput(true);
+          urlConnection.setDoInput(true);
+          out = new BufferedOutputStream(urlConnection.getOutputStream());
+          BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(out, "UTF-8"));
+          JSONObject postBody = new JSONObject();
+          postBody.put("push_ack", new JSONObject()
+                          .put("message_id", messageId)
+                          .put("status", status));
+          writer.write(postBody.toString());
+          writer.flush();
+          writer.close();
+          out.close();
+          urlConnection.getResponseCode();
+          urlConnection.disconnect();
+        } catch (Exception e) {
+          Log.e(LOG_TAG, "Error when sending display-ack to app server: " + e.getMessage());
+        }
+      }).start();
+    }
+  }
+
+  private boolean isNotificationEnabled(@Nullable String channelId) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      if (!TextUtils.isEmpty(channelId)) {
+        NotificationManager manager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+        NotificationChannel channel = manager.getNotificationChannel(channelId);
+        return channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+      }
+      return false;
+    } else {
+      return NotificationManagerCompat.from(getApplicationContext()).areNotificationsEnabled();
+    }
+  }
+
+  @RequiresApi(api = Build.VERSION_CODES.O)
+  private String getChannelId(Bundle extras) {
+    NotificationManager notificationManager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
+    String channelID = extras.getString(ANDROID_CHANNEL_ID);
+
+    // if the push payload specifies a channel use it
+    if (channelID != null) {
+      return channelID;
+    } else {
+      List<NotificationChannel> channels = notificationManager.getNotificationChannels();
+
+      if (channels.size() == 1) {
+        channelID = channels.get(0).getId();
+      } else {
+        channelID = extras.getString(ANDROID_CHANNEL_ID, DEFAULT_CHANNEL_ID);
+      }
+      Log.d(LOG_TAG, "Using channel ID = " + channelID);
+      return channelID;
+    }
   }
 }
