@@ -116,6 +116,7 @@ static char coldstartKey;
         pushHandler.isInline = YES;
         [pushHandler notificationReceived];
 
+        [self messageAck:messageId status:@"processed"];
         completionHandler(UIBackgroundFetchResultNewData);
     }
     // app is in background or in stand by
@@ -133,27 +134,17 @@ static char coldstartKey;
         }
 
         if (silent == 1) {
-            id noSilentStr = [userInfo objectForKey:@"no-silent"];
-            BOOL noSilent = [noSilentStr isKindOfClass:[NSString class]] && [noSilentStr isEqualToString:@"1"];
-            if (noSilent && [self userHasRemoteNotificationsEnabled]) {
-                // Transform it into a normal (not silent) remote notification and put it in shade
-//                NSMutableDictionary *notiClone = [userInfo mutableCopy];
-//                NSMutableDictionary * aps = [[userInfo objectForKey:@"aps"] mutableCopy];
-//                [aps removeObjectForKey:@"content-available"];
-//                [notiClone setObject:aps forKey:@"aps"];
-//                self.launchNotification = notiClone;
-                [self messageAck:messageId status:@"processed"];
-                completionHandler(UIBackgroundFetchResultNewData);
-                return;
-            } else if (noSilent) {
-                // Ack the message to app server and not to be treated as a silent notification
-                [self messageAck:messageId status:@"denied"];
+            id noBackgroundRefresh = [userInfo objectForKey:@"no-background-refresh"];
+            BOOL noRefresh = [noBackgroundRefresh isKindOfClass:[NSString class]] && [noBackgroundRefresh isEqualToString:@"1"];
+            if (noRefresh) {
+                [self messageAck:messageId status:[self userHasRemoteNotificationsEnabled]? @"processed" : @"denied"];
                 completionHandler(UIBackgroundFetchResultNewData);
                 return;
             }
             NSLog(@"this should be a silent push");
             void (^safeHandler)(UIBackgroundFetchResult) = ^(UIBackgroundFetchResult result){
                 dispatch_async(dispatch_get_main_queue(), ^{
+                    [self messageAck:messageId status:@"processed"];
                     completionHandler(result);
                 });
             };
@@ -193,8 +184,8 @@ static char coldstartKey;
     if (displayCallbackOptions) {
         NSString *url = [displayCallbackOptions objectForKey:@"url"];
         NSDictionary *headers = [displayCallbackOptions objectForKey:@"headers"];
-        NSDictionary *bodyDict = [[NSDictionary alloc] initWithObjectsAndKeys:
-                                  [[NSDictionary alloc] initWithObjectsAndKeys:
+        NSDictionary *bodyDict = [NSDictionary dictionaryWithObjectsAndKeys:
+                                  [NSDictionary dictionaryWithObjectsAndKeys:
                                    status, @"status",
                                    messageId, @"message_id", nil],
                                   @"push_ack", nil];
@@ -207,7 +198,7 @@ static char coldstartKey;
             return;
         }
         
-        NSMutableURLRequest *urlRequest = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString:url]];
+        NSMutableURLRequest *urlRequest = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:url]];
         
         [urlRequest setHTTPMethod:@"POST"];
         
