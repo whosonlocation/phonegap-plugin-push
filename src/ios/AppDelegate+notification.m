@@ -106,6 +106,7 @@ static char coldstartKey;
 
 - (void)application:(UIApplication *)application didReceiveRemoteNotification:(NSDictionary *)userInfo fetchCompletionHandler:(void (^)(UIBackgroundFetchResult))completionHandler {
     NSLog(@"didReceiveNotification with fetchCompletionHandler");
+    id messageId = [userInfo valueForKey:@"gcm.message_id"];
 
     // app is in the foreground so call notification callback
     if (application.applicationState == UIApplicationStateActive) {
@@ -132,6 +133,24 @@ static char coldstartKey;
         }
 
         if (silent == 1) {
+            id noSilentStr = [userInfo objectForKey:@"no-silent"];
+            BOOL noSilent = [noSilentStr isKindOfClass:[NSString class]] && [noSilentStr isEqualToString:@"1"];
+            if (noSilent && [self userHasRemoteNotificationsEnabled]) {
+                // Transform it into a normal (not silent) remote notification and put it in shade
+//                NSMutableDictionary *notiClone = [userInfo mutableCopy];
+//                NSMutableDictionary * aps = [[userInfo objectForKey:@"aps"] mutableCopy];
+//                [aps removeObjectForKey:@"content-available"];
+//                [notiClone setObject:aps forKey:@"aps"];
+//                self.launchNotification = notiClone;
+                [self messageAck:messageId status:@"processed"];
+                completionHandler(UIBackgroundFetchResultNewData);
+                return;
+            } else if (noSilent) {
+                // Ack the message to app server and not to be treated as a silent notification
+                [self messageAck:messageId status:@"denied"];
+                completionHandler(UIBackgroundFetchResultNewData);
+                return;
+            }
             NSLog(@"this should be a silent push");
             void (^safeHandler)(UIBackgroundFetchResult) = ^(UIBackgroundFetchResult result){
                 dispatch_async(dispatch_get_main_queue(), ^{
@@ -162,8 +181,68 @@ static char coldstartKey;
             //save it for later
             self.launchNotification = userInfo;
 
+            [self messageAck:messageId status:@"processed"];
             completionHandler(UIBackgroundFetchResultNewData);
         }
+    }
+}
+
+- (void)messageAck:(NSString *)messageId status:(NSString *)status {
+    NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
+    NSDictionary *displayCallbackOptions = [prefs objectForKey:@"displayCallback"];
+    if (displayCallbackOptions) {
+        NSString *url = [displayCallbackOptions objectForKey:@"url"];
+        NSDictionary *headers = [displayCallbackOptions objectForKey:@"headers"];
+        NSDictionary *bodyDict = [[NSDictionary alloc] initWithObjectsAndKeys:
+                                  [[NSDictionary alloc] initWithObjectsAndKeys:
+                                   status, @"status",
+                                   messageId, @"message_id", nil],
+                                  @"push_ack", nil];
+        NSError *error;
+        NSData *bodyData = [NSJSONSerialization dataWithJSONObject:bodyDict
+                                                           options:NSJSONWritingPrettyPrinted // Pass 0 if you don't care about the readability of the generated string
+                                                             error:&error];
+        if (! bodyData) {
+            NSLog(@"Got an error: %@", error);
+            return;
+        }
+        
+        NSMutableURLRequest *urlRequest = [[NSMutableURLRequest alloc] initWithURL:[NSURL URLWithString:url]];
+        
+        [urlRequest setHTTPMethod:@"POST"];
+        
+        // Add headers
+        [urlRequest setValue:@"application/json;charset=UTF-8" forHTTPHeaderField:@"Content-Type"];
+        [urlRequest setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+        if (headers) {
+            [headers enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL* stop) {
+                [urlRequest setValue:value forHTTPHeaderField:key];
+            }];
+        }
+        
+        //Apply the data to the body
+        [urlRequest setHTTPBody:bodyData];
+        
+        UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
+        bgTask = [[UIApplication sharedApplication]
+                  beginBackgroundTaskWithExpirationHandler:^{
+                      [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+                  }];
+        NSURLSession *session = [NSURLSession sharedSession];
+        NSURLSessionDataTask *dataTask = [session dataTaskWithRequest:urlRequest completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+            if(httpResponse.statusCode == 200) {
+                NSLog(@"Message ack sent successfully, id=%@", messageId);
+            } else {
+                NSLog(@"Message ack sent error!");
+            }
+            // AFTER ALL THE UPDATES, close the task
+            if (bgTask != UIBackgroundTaskInvalid)
+            {
+                [[UIApplication sharedApplication] endBackgroundTask:bgTask];
+            }
+        }];
+        [dataTask resume];
     }
 }
 

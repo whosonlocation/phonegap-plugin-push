@@ -338,7 +338,13 @@
                     [self performSelector:@selector(notificationReceived) withObject:nil afterDelay: 0.5];
                 });
             }
-
+            
+            // Save display ack to user-defaults
+            NSMutableDictionary* pushDisplayCallbackOptions = [options objectForKey:@"displayCallback"];
+            if (iosOptions != nil) {
+                NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
+                [prefs setObject:pushDisplayCallbackOptions forKey:@"displayCallback"];
+            }
         }];
     }
 }
