@@ -987,7 +987,7 @@ public class FCMService extends FirebaseMessagingService implements PushConstant
       if (!TextUtils.isEmpty(channelId)) {
         NotificationManager manager = (NotificationManager) getApplicationContext().getSystemService(Context.NOTIFICATION_SERVICE);
         NotificationChannel channel = manager.getNotificationChannel(channelId);
-        return channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
+        return NotificationManagerCompat.from(getApplicationContext()).areNotificationsEnabled() && channel.getImportance() != NotificationManager.IMPORTANCE_NONE;
       }
       return false;
     } else {
