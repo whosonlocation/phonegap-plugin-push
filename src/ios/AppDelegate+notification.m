@@ -138,6 +138,9 @@ static char coldstartKey;
             BOOL noRefresh = [noBackgroundRefresh isKindOfClass:[NSString class]] && [noBackgroundRefresh isEqualToString:@"1"];
             if (noRefresh) {
                 [self messageAck:messageId status:[self userHasRemoteNotificationsEnabled]? @"processed" : @"denied"];
+                if ([self userHasRemoteNotificationsEnabled]) {
+                    self.launchNotification = userInfo;
+                }
                 completionHandler(UIBackgroundFetchResultNewData);
                 return;
             }
